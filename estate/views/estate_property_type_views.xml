@@ -4,18 +4,17 @@
     <field name="model">estate.property.type</field>
     <field name="arch" type="xml">
       <form string="Estate Property Type">
+        <header>
+          <button special="save" type="object" class="btn btn-primary" string="Save" close="1"/>
+          <button special="cancel" type="object" class="btn btn-secondary" string="Cancel" close="1"/>
+        </header>
         <sheet>
           <group>
             <h1>
               <field name="name" />
             </h1>
           </group>
-
         </sheet>
-        <footer>
-          <!-- <button name="test" string="Remove phone from blacklist" type="object" class="btn-primary" data-hotkey="q"/> -->
-          <button string="Discard" class="btn-secondary" special="cancel" data-hotkey="x"/>
-        </footer>
       </form>
     </field>
   </record>

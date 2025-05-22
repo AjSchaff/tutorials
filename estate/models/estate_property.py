@@ -1,6 +1,6 @@
 from odoo import models, fields, api
 from datetime import timedelta
-from odoo.exceptions import UserError
+from odoo.exceptions import UserError, ValidationError
 
 
 class EstateProperty(models.Model):
@@ -107,4 +107,29 @@ class EstateProperty(models.Model):
             else:
                 property.state = "canceled"
                 property.active = False
+        return True
+
+    _sql_constraints = [
+        (
+            "check_expected_price",
+            "CHECK(expected_price > 0)",
+            "Expected price must be greater than 0.",
+        ),
+        (
+            "check_selling_price",
+            "CHECK(selling_price > 0)",
+            "Selling price must be greater than 0.",
+        ),
+    ]
+
+    @api.constrains("selling_price")
+    def _check_constraints(self):
+        for property in self:
+            if property.selling_price < 5000:
+                raise ValidationError("Selling price must be at least 5000.")
+            elif property.selling_price < 0.9 * property.expected_price:
+                raise ValidationError(
+                    "Selling price must be at least 90% of the expected price."
+                )
+
         return True
