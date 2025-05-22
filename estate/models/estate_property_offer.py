@@ -1,6 +1,7 @@
 from odoo import fields, models, api
 from dateutil.relativedelta import relativedelta
 from odoo.exceptions import UserError
+from odoo.tools.float_utils import float_compare
 
 
 class EstateOffer(models.Model):
@@ -23,6 +24,13 @@ class EstateOffer(models.Model):
     date_deadline = fields.Date(
         compute="_compute_date_deadline", inverse="_inverse_date_deadline"
     )
+
+    @api.constrains('price')
+    def _check_price(self):
+        for record in self:
+            min_price = record.property_id.expected_price * 0.9
+            if float_compare(record.price, min_price, precision_digits=2) < 0:
+                raise UserError("The offer price must be at least 90% of the expected price.")
 
     @api.depends("validity")
     def _compute_date_deadline(self):
@@ -47,3 +55,7 @@ class EstateOffer(models.Model):
 
     def action_refuse(self):
         self.status = "refused"
+
+    _sql_constraints = [
+        ("check_price", "CHECK(price > 0)", "Price must be greater than 0."),
+    ]
