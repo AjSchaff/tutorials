@@ -1,5 +1,6 @@
 from odoo import models, fields, api
 from datetime import timedelta
+from odoo.exceptions import UserError
 
 
 class EstateProperty(models.Model):
@@ -57,11 +58,7 @@ class EstateProperty(models.Model):
     @api.depends("living_area", "garden_area")
     def _compute_total_area(self):
         for property in self:
-            property.total_area = (
-                property.living_area + property.garden_area
-                if property.living_area and property.garden_area
-                else 0
-            )
+            property.total_area = property.living_area + property.garden_area
 
     best_price = fields.Float(compute="_compute_best_price")
 
@@ -71,3 +68,43 @@ class EstateProperty(models.Model):
             property.best_price = (
                 max(property.offer_ids.mapped("price")) if property.offer_ids else 0
             )
+
+    @api.onchange("garden")
+    def _onchange_garden(self):
+        for estate in self:
+            if estate.garden:
+                estate.garden_area = 10
+                estate.garden_orientation = "north"
+            else:
+                estate.garden_area = 0
+                estate.garden_orientation = False
+
+    @api.onchange("date_availability")
+    def _onchange_date_availability(self):
+        if self.date_availability < fields.Date.today():
+            return {
+                "warning": {
+                    "title": "Invalid Date",
+                    "message": "The date of availability cannot be in the past",
+                }
+            }
+
+    def action_sold(self):
+        for property in self:
+            if property.state == "canceled":
+                raise UserError("This listing has already been canceled.")
+            else:
+                property.state = "sold"
+                property.buyer_id = property.env.user.partner_id
+                property.selling_price = property.best_price
+                property.active = False
+        return True
+
+    def action_cancel(self):
+        for property in self:
+            if property.state == "sold":
+                raise UserError("This listing has already been sold.")
+            else:
+                property.state = "canceled"
+                property.active = False
+        return True
