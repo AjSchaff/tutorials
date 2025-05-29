@@ -7,6 +7,7 @@ from odoo.tools.float_utils import float_compare
 class EstateOffer(models.Model):
     _name = "estate.property.offer"
     _description = "Offers made for real estate"
+    _order = "price desc"
 
     price = fields.Float()
     status = fields.Selection(
@@ -25,12 +26,14 @@ class EstateOffer(models.Model):
         compute="_compute_date_deadline", inverse="_inverse_date_deadline"
     )
 
-    @api.constrains('price')
+    @api.constrains("price")
     def _check_price(self):
         for record in self:
             min_price = record.property_id.expected_price * 0.9
             if float_compare(record.price, min_price, precision_digits=2) < 0:
-                raise UserError("The offer price must be at least 90% of the expected price.")
+                raise UserError(
+                    "The offer price must be at least 90% of the expected price."
+                )
 
     @api.depends("validity")
     def _compute_date_deadline(self):

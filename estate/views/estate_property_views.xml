@@ -26,18 +26,18 @@
         <header>
           <button name="action_sold" type="object" class="btn-primary" string="Sold"/>
           <button name="action_cancel" type="object" class="btn-danger" string="Cancel"/>
+          <field name="state" string="Status" widget="statusbar" statusbar_visible="new,received,accepted,sold"/>
         </header>
         <sheet>
           <group>
             <h1 string="Name">
               <field name="name" />
+              <field name="tag_ids" widget="many2many_tags" options="{'color_field': 'color'}" />
             </h1>
-            <field name="tag_ids" widget="many2many_tags"/>
           </group>
 
           <group>
             <group>
-              <field name="state" string="Status"/>
               <field name="property_type_id" />
               <field name="postcode" />
               <field name="date_availability" string="Available From"/>
@@ -60,7 +60,7 @@
                 <field name="garage" string="Garage"/>
                 <field name="garden" string="Garden"/>
                 <field name="garden_area" string="Garden Area(sqm)"/>
-                <field name="garden_orientation" string="Garden Orientation"/>
+                <field name="garden_orientation" string="Garden Orientation" widget="radio" />
                 <field name="total_area" string="Total Area(sqm)"/>
               </group>
             </page>
