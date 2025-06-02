@@ -24,7 +24,8 @@ CREATE TRIGGER update_google_api_key_updated_at
     EXECUTE FUNCTION mydb.update_updated_at_column();
 
 -- Insert the API key
+-- TODO: Replace 'YOUR_API_KEY' with the actual Google API key
 INSERT INTO mydb.google_api_key (api_key)
-VALUES ('AIzaSyBo9jLDlMwV7kKSg_i7RMLAbYoKdbAa5hU')
+VALUES ('YOUR_API_KEY')
 ON CONFLICT (id) DO UPDATE
 SET api_key = EXCLUDED.api_key; 
