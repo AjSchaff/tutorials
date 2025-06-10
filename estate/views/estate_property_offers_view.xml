@@ -11,7 +11,7 @@
         <field name="status" string="Status" optional="False"/>
         <button name="action_accept" invisible="status in ('accepted', 'refused')" type="object" icon="fa-check" />
         <button name="action_refuse" invisible="status in ('accepted', 'refused')" type="object" icon="fa-times" />
-        <field name="type_id" string="Property Type"/>
+        <field name="property_type_id" string="Property Type"/>
       </list>
     </field>
   </record>
