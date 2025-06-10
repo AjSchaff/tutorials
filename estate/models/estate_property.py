@@ -1,6 +1,9 @@
+import logging
 from odoo import models, fields, api
 from datetime import timedelta
 from odoo.exceptions import UserError, ValidationError
+
+_logger = logging.getLogger(__name__)
 
 
 class EstateProperty(models.Model):
@@ -55,6 +58,15 @@ class EstateProperty(models.Model):
     garden_area = fields.Integer()
     living_area = fields.Integer()
     total_area = fields.Integer(compute="_compute_total_area")
+
+    @api.ondelete(at_uninstall=False)
+    def _unlink_except_canceled_or_new(self):
+        for property in self:
+            _logger.info(f"Property state: {property.state}")
+            if property.state not in ["new", "canceled"]:
+                raise UserError(
+                    "You cannot delete a property that is not in 'New' or 'Canceled' state."
+                )
 
     @api.depends("living_area", "garden_area")
     def _compute_total_area(self):
