@@ -1,7 +1,7 @@
 {
     "name": "Delivery Route Optimizer",
     "version": "1.0",
-    "category": "Inventory",
+    "category": "Inventory/Delivery",
     "summary": "Optimize delivery routes using Google Maps",
     "description": """
         Optimize delivery routes using Google Maps API:

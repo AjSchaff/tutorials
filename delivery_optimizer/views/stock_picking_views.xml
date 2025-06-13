@@ -5,9 +5,6 @@
         <field name="model">stock.picking</field>
         <field name="inherit_id" ref="stock.view_picking_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//header" position="inside">
-                <button name="action_optimize_route" string="Optimize Route" type="object" class="btn-primary" invisible="picking_type_code != 'outgoing' or state not in ('assigned', 'confirmed')"/>
-            </xpath>
             <xpath expr="//notebook" position="inside">
                 <page string="Route Optimization" name="route_optimization">
                     <group>
@@ -21,29 +18,12 @@
         </field>
     </record>
 
-
-    <!-- <record id="delivery_optimizer.stock_picking_list_inherit" model="ir.ui.view">
-        <field name="name">stock.picking.list.inherit.delivery.optimizer</field>
-        <field name="model">stock.picking</field>
-        <field name="inherit_id" ref="stock.picking.list"/>
-        <field name="arch" type="xml">
-            <header>
-                <button name="action_optimize_route" string="Optimize Route" type="object" class="btn-primary" context="{}"/>
-            </header>
-        </field>
-    </record> -->
-
-
     <!-- Add list view fields -->
     <record id="delivery_optimizer.stock_picking_list_inherit" model="ir.ui.view">
         <field name="name">stock.picking.tree.inherit.delivery.optimizer</field>
         <field name="model">stock.picking</field>
         <field name="inherit_id" ref="stock.vpicktree"/>
         <field name="arch" type="xml">
-            <xpath expr="//header" position="inside">
-                <button name="action_optimize_route" string="Optimize Route" type="object" class="btn-primary"/>
-            </xpath>
-
             <field name="scheduled_date" position="after">
                 <field name="optimized_sequence" optional="show"/>
                 <field name="distance_from_warehouse" optional="show"/>
@@ -51,5 +31,31 @@
             </field>
         </field>
     </record>
+
+    <!-- Create server action for route optimization -->
+    <record id="action_optimize_route_server" model="ir.actions.server">
+        <field name="name">Optimize Delivery Routes</field>
+        <field name="model_id" ref="stock.model_stock_picking"/>
+        <field name="binding_model_id" ref="stock.model_stock_picking"/>
+        <field name="binding_view_types">list,form</field>
+        <field name="state">code</field>
+        <field name="code">
+            action = model.action_optimize_route()
+        </field>
+    </record>
+
+    <!-- Server Action for Open Google Maps Route -->
+    <record id="action_open_google_maps_route" model="ir.actions.server">
+        <field name="name">Open Google Maps Route</field>
+        <field name="model_id" ref="stock.model_stock_picking"/>
+        <field name="state">code</field>
+        <field name="code">action = model.action_open_google_maps_route()</field>
+    </record>
+
+    <!-- Update menu item to use the server action -->
+    <menuitem id="menu_delivery_optimizer_root" name="Route Optimization" parent="stock.menu_stock_root" sequence="100"/>
+    <menuitem id="menu_optimize_route" name="Optimize Route" parent="menu_delivery_optimizer_root" action="action_optimize_route_server" sequence="10"/>
+    <menuitem id="menu_google_maps_route" name="Open Google Maps Route" parent="menu_delivery_optimizer_root" action="action_open_google_maps_route" sequence="20"/>
+
 </odoo>
 
