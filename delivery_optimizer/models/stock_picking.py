@@ -113,30 +113,68 @@ class StockPicking(models.Model):
         if not deliveries:
             return False
 
-        deliveries_by_date = self._group_deliveries_by_date(deliveries)
         warehouse = self._get_validated_warehouse()
+        today = fields.Date.context_today(self)
 
-        for date, day_deliveries in deliveries_by_date.items():
-            valid_deliveries = self._filter_valid_deliveries(day_deliveries)
-            if not valid_deliveries:
+        valid_deliveries = []
+        for delivery in deliveries:
+            # Exclude incoming pickings
+            if delivery.picking_type_id.code == "incoming":
+                delivery.write(
+                    {
+                        "optimized_sequence": "Incoming Shipment",
+                        "distance_from_warehouse": 0,
+                        "total_route_distance": 0,
+                    }
+                )
                 continue
+            # Exclude past dates
+            if (
+                delivery.scheduled_date
+                and fields.Date.to_date(delivery.scheduled_date) < today
+            ):
+                delivery.write(
+                    {
+                        "optimized_sequence": "Update Delivery Date",
+                        "distance_from_warehouse": 0,
+                        "total_route_distance": 0,
+                    }
+                )
+            else:
+                valid_deliveries.append(delivery)
 
-            addresses = [warehouse.partner_id] + [
-                d.partner_id for d in valid_deliveries
-            ]
-            if len(addresses) < 2:
-                continue
+        # Skip if no valid deliveries after filtering
+        if not valid_deliveries:
+            return True
 
-            distance_matrix = self._build_distance_matrix(addresses)
-            best_route = self._find_best_route(valid_deliveries, distance_matrix)
+        # Filter for valid addresses
+        valid_deliveries = self._filter_valid_deliveries(valid_deliveries)
+        if not valid_deliveries:
+            return True
 
-            if not best_route:
-                raise UserError(_("Could not find a valid route."))
-
-            total_distance = self._calculate_route_distance(best_route, distance_matrix)
-            self._assign_stop_numbers(
-                best_route, valid_deliveries, addresses, distance_matrix, total_distance
+        # Log all valid addresses
+        for d in valid_deliveries:
+            addr = d.partner_id
+            _logger.info(
+                f"Valid address for {addr.name}: {addr.street}, {addr.street2}, {addr.city}, "
+                f"{addr.state_id.name if addr.state_id else ''}, {addr.zip}, "
+                f"{addr.country_id.code if addr.country_id else ''}"
             )
+
+        addresses = [warehouse.partner_id] + [d.partner_id for d in valid_deliveries]
+        if len(addresses) < 2:
+            return True
+
+        distance_matrix = self._build_distance_matrix(addresses)
+        best_route = self._find_best_route(valid_deliveries, distance_matrix)
+
+        if not best_route:
+            raise UserError(_("Could not find a valid route."))
+
+        total_distance = self._calculate_route_distance(best_route, distance_matrix)
+        self._assign_stop_numbers(
+            best_route, valid_deliveries, addresses, distance_matrix, total_distance
+        )
 
         return True
 
@@ -148,9 +186,28 @@ class StockPicking(models.Model):
         return grouped
 
     def _get_validated_warehouse(self):
-        warehouse = self.env["stock.warehouse"].search(
-            [("company_id", "=", self.company_id.id)], limit=1
+        # Log the company_id we're searching with
+        _logger.info(f"Searching for warehouse with company_id: {self.env.company.id}")
+        _logger.info(f"Company name: {self.env.company.name}")
+
+        # Let's also log all warehouses in the system to see what's available
+        all_warehouses = self.env["stock.warehouse"].search([])
+        _logger.info(
+            f"All warehouses in system: {[(w.name, w.company_id.name) for w in all_warehouses]}"
         )
+
+        warehouse = self.env["stock.warehouse"].search(
+            [("company_id", "=", self.env.company.id)], limit=1
+        )
+
+        # Add logging to show what warehouse was found
+        _logger.info(f"Found warehouse: {warehouse.name if warehouse else 'None'}")
+        if warehouse and warehouse.partner_id:
+            _logger.info(f"Warehouse partner: {warehouse.partner_id.name}")
+            _logger.info(
+                f"Warehouse address: {warehouse.partner_id.street}, {warehouse.partner_id.city}, {warehouse.partner_id.zip}"
+            )
+
         if not warehouse or not warehouse.partner_id:
             raise UserError(_("Please configure warehouse address first."))
         if not self._validate_address(warehouse.partner_id):
@@ -224,14 +281,18 @@ class StockPicking(models.Model):
     def _assign_stop_numbers(self, route, deliveries, addresses, matrix, total_dist):
         addr_map = {}
         for d in deliveries:
-            key = (d.partner_id.street, d.partner_id.city, d.partner_id.zip)
+            key = self._get_address_key(d.partner_id)
+            _logger.info(
+                f"Delivery {d.name} address key: {key} (Partner: {d.partner_id.name})"
+            )
             addr_map.setdefault(key, []).append(d)
 
         used_keys, stop = set(), 1
         today = fields.Date.context_today(self)
         for idx in route:
             partner = addresses[idx]
-            key = (partner.street, partner.city, partner.zip)
+            key = self._get_address_key(partner)
+            _logger.info(f"Assigning stop {stop} to key: {key}")
             if key in used_keys:
                 continue
             used_keys.add(key)
@@ -261,15 +322,22 @@ class StockPicking(models.Model):
             stop += 1
 
     def action_optimize_route(self):
-        """Manual trigger for route optimization, supports multi-record selection."""
-        # Only optimize selected records that are outgoing and assigned/confirmed
-        pickings = self.filtered(
-            lambda p: (
-                p.picking_type_id.code == "outgoing"
-                and p.state in ("assigned", "confirmed")
-            )
-        )
+        """Manual trigger for route optimization, processes all eligible deliveries for today."""
+        company = self.env.company
+        today = fields.Date.context_today(self)
+        today_str = fields.Date.to_string(today)
 
+        pickings = self.env["stock.picking"].search(
+            [
+                ("picking_type_id.code", "=", "outgoing"),
+                ("picking_type_id", "=", 2),
+                ("state", "in", ("assigned", "confirmed")),
+                ("company_id", "=", company.id),
+                # This will match any scheduled_date with today's date, regardless of time
+                ("scheduled_date", ">=", today_str + " 00:00:00"),
+                ("scheduled_date", "<", today_str + " 23:59:59"),
+            ]
+        )
         if not pickings:
             return {
                 "type": "ir.actions.client",
@@ -277,24 +345,18 @@ class StockPicking(models.Model):
                 "params": {
                     "title": _("No Eligible Deliveries"),
                     "message": _(
-                        "No outgoing deliveries in assigned or confirmed state were found."
+                        "No outgoing deliveries in assigned or confirmed state were found for company %s."
+                        % company.name
                     ),
                     "type": "warning",
                     "sticky": False,
                 },
             }
-
         try:
             self._optimize_delivery_route(pickings)
             return {
                 "type": "ir.actions.client",
-                "tag": "display_notification",
-                "params": {
-                    "title": _("Success"),
-                    "message": _("Delivery routes have been optimized successfully."),
-                    "type": "success",
-                    "sticky": False,
-                },
+                "tag": "reload",
             }
         except Exception as e:
             _logger.error(f"Route optimization failed: {str(e)}")
@@ -308,3 +370,69 @@ class StockPicking(models.Model):
                     "sticky": True,
                 },
             }
+
+    def _get_address_key(self, partner):
+        """Return a normalized unique key for a delivery address."""
+        return (
+            (partner.street or "").strip().lower(),
+            (partner.street2 or "").strip().lower(),
+            (partner.city or "").strip().lower(),
+            (partner.state_id.name if partner.state_id else "").strip().lower(),
+            (partner.zip or "").strip(),
+            (partner.country_id.code if partner.country_id else "").strip().upper(),
+        )
+
+    def action_open_google_maps_route(self):
+        today = fields.Date.context_today(self)
+        today_str = fields.Date.to_string(today)
+        pickings = self.env['stock.picking'].search([
+            ('picking_type_id.code', '=', 'outgoing'),
+            ('state', 'in', ('assigned', 'confirmed')),
+            ('scheduled_date', '>=', today_str + " 00:00:00"),
+            ('scheduled_date', '<=', today_str + " 23:59:59"),
+        ])
+        warehouse = self.env["stock.warehouse"].search([
+            ("company_id", "=", self.env.company.id)
+        ], limit=1)
+        if not warehouse or not warehouse.partner_id or not (warehouse.partner_id.street and warehouse.partner_id.city and warehouse.partner_id.zip):
+            raise UserError(_("No valid warehouse address found."))
+        # Filter valid deliveries
+        valid_deliveries = []
+        for p in pickings:
+            addr = p.partner_id
+            if addr and addr.street and addr.city and addr.zip:
+                valid_deliveries.append(p)
+        if not valid_deliveries:
+            raise UserError(_("No valid delivery addresses found."))
+        # Build addresses list for optimizer
+        addresses = [warehouse.partner_id] + [d.partner_id for d in valid_deliveries]
+        distance_matrix = self._build_distance_matrix(addresses)
+        best_route = self._find_best_route(valid_deliveries, distance_matrix)
+        if not best_route:
+            raise UserError(_("Could not find a valid route."))
+        # Build the ordered address list: warehouse -> optimized deliveries (no duplicates) -> warehouse
+        ordered_addresses = [warehouse.partner_id]
+        seen = set()
+        for idx in best_route:
+            partner = addresses[idx]
+            key = (
+                (partner.street or '').strip().lower(),
+                (partner.street2 or '').strip().lower(),
+                (partner.city or '').strip().lower(),
+                (partner.state_id.name if partner.state_id else '').strip().lower(),
+                (partner.zip or '').strip(),
+                (partner.country_id.code if partner.country_id else '').strip().upper(),
+            )
+            if key not in seen:
+                seen.add(key)
+                ordered_addresses.append(partner)
+        ordered_addresses.append(warehouse.partner_id)  # Return to warehouse
+        # Format for Google Maps
+        formatted_addresses = [f"{a.street}, {a.city}, {a.zip}" for a in ordered_addresses]
+        base_url = "https://www.google.com/maps/dir/"
+        route_url = base_url + "/".join(addr.replace(" ", "+") for addr in formatted_addresses)
+        return {
+            "type": "ir.actions.act_url",
+            "url": route_url,
+            "target": "new",
+        }
