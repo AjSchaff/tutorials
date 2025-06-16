@@ -3,6 +3,7 @@ from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 from datetime import datetime, timedelta
 from itertools import permutations
+from .res_config_settings import ResConfigSettings
 
 _logger = logging.getLogger(__name__)
 
@@ -339,6 +340,11 @@ class StockPicking(models.Model):
         company = self.env.company
         today = fields.Date.context_today(self)
         today_str = fields.Date.to_string(today)
+
+        # Check subscription status before proceeding
+        config = self.env["res.config.settings"].create({})
+        if not config.check_subscription_status():
+            raise UserError(ResConfigSettings.SUBSCRIPTION_INACTIVE_ERROR)
 
         pickings = self.env["stock.picking"].search(
             [
