@@ -3,6 +3,7 @@ from odoo import models, fields, api, _
 from odoo.exceptions import UserError
 from datetime import datetime, timedelta
 from itertools import permutations
+from .res_config_settings import ResConfigSettings
 
 _logger = logging.getLogger(__name__)
 
@@ -122,7 +123,7 @@ class StockPicking(models.Model):
             if delivery.picking_type_id.code == "incoming":
                 delivery.write(
                     {
-                        "optimized_sequence": "Incoming Shipment",
+                        "optimized_sequence": "",
                         "distance_from_warehouse": 0,
                         "total_route_distance": 0,
                     }
@@ -135,13 +136,26 @@ class StockPicking(models.Model):
             ):
                 delivery.write(
                     {
-                        "optimized_sequence": "Update Delivery Date",
+                        "optimized_sequence": "",
                         "distance_from_warehouse": 0,
                         "total_route_distance": 0,
                     }
                 )
-            else:
-                valid_deliveries.append(delivery)
+                continue
+            # Exclude future dates (do not mark, just skip)
+            if (
+                delivery.scheduled_date
+                and fields.Date.to_date(delivery.scheduled_date) > today
+            ):
+                delivery.write(
+                    {
+                        "optimized_sequence": "",
+                        "distance_from_warehouse": 0,
+                        "total_route_distance": 0,
+                    }
+                )
+                continue
+            valid_deliveries.append(delivery)
 
         # Skip if no valid deliveries after filtering
         if not valid_deliveries:
@@ -301,7 +315,7 @@ class StockPicking(models.Model):
                 if d.scheduled_date and fields.Date.to_date(d.scheduled_date) < today:
                     d.write(
                         {
-                            "optimized_sequence": "Update Delivery Date",
+                            "optimized_sequence": "",
                             "distance_from_warehouse": 0,
                             "total_route_distance": 0,
                         }
@@ -327,15 +341,17 @@ class StockPicking(models.Model):
         today = fields.Date.context_today(self)
         today_str = fields.Date.to_string(today)
 
+        # Check subscription status before proceeding
+        config = self.env["res.config.settings"].create({})
+        if not config.check_subscription_status():
+            raise UserError(ResConfigSettings.SUBSCRIPTION_INACTIVE_ERROR)
+
         pickings = self.env["stock.picking"].search(
             [
                 ("picking_type_id.code", "=", "outgoing"),
                 ("picking_type_id", "=", 2),
                 ("state", "in", ("assigned", "confirmed")),
                 ("company_id", "=", company.id),
-                # This will match any scheduled_date with today's date, regardless of time
-                ("scheduled_date", ">=", today_str + " 00:00:00"),
-                ("scheduled_date", "<", today_str + " 23:59:59"),
             ]
         )
         if not pickings:
@@ -385,16 +401,26 @@ class StockPicking(models.Model):
     def action_open_google_maps_route(self):
         today = fields.Date.context_today(self)
         today_str = fields.Date.to_string(today)
-        pickings = self.env['stock.picking'].search([
-            ('picking_type_id.code', '=', 'outgoing'),
-            ('state', 'in', ('assigned', 'confirmed')),
-            ('scheduled_date', '>=', today_str + " 00:00:00"),
-            ('scheduled_date', '<=', today_str + " 23:59:59"),
-        ])
-        warehouse = self.env["stock.warehouse"].search([
-            ("company_id", "=", self.env.company.id)
-        ], limit=1)
-        if not warehouse or not warehouse.partner_id or not (warehouse.partner_id.street and warehouse.partner_id.city and warehouse.partner_id.zip):
+        pickings = self.env["stock.picking"].search(
+            [
+                ("picking_type_id.code", "=", "outgoing"),
+                ("state", "in", ("assigned", "confirmed")),
+                ("scheduled_date", ">=", today_str + " 00:00:00"),
+                ("scheduled_date", "<=", today_str + " 23:59:59"),
+            ]
+        )
+        warehouse = self.env["stock.warehouse"].search(
+            [("company_id", "=", self.env.company.id)], limit=1
+        )
+        if (
+            not warehouse
+            or not warehouse.partner_id
+            or not (
+                warehouse.partner_id.street
+                and warehouse.partner_id.city
+                and warehouse.partner_id.zip
+            )
+        ):
             raise UserError(_("No valid warehouse address found."))
         # Filter valid deliveries
         valid_deliveries = []
@@ -416,21 +442,25 @@ class StockPicking(models.Model):
         for idx in best_route:
             partner = addresses[idx]
             key = (
-                (partner.street or '').strip().lower(),
-                (partner.street2 or '').strip().lower(),
-                (partner.city or '').strip().lower(),
-                (partner.state_id.name if partner.state_id else '').strip().lower(),
-                (partner.zip or '').strip(),
-                (partner.country_id.code if partner.country_id else '').strip().upper(),
+                (partner.street or "").strip().lower(),
+                (partner.street2 or "").strip().lower(),
+                (partner.city or "").strip().lower(),
+                (partner.state_id.name if partner.state_id else "").strip().lower(),
+                (partner.zip or "").strip(),
+                (partner.country_id.code if partner.country_id else "").strip().upper(),
             )
             if key not in seen:
                 seen.add(key)
                 ordered_addresses.append(partner)
         ordered_addresses.append(warehouse.partner_id)  # Return to warehouse
         # Format for Google Maps
-        formatted_addresses = [f"{a.street}, {a.city}, {a.zip}" for a in ordered_addresses]
+        formatted_addresses = [
+            f"{a.street}, {a.city}, {a.zip}" for a in ordered_addresses
+        ]
         base_url = "https://www.google.com/maps/dir/"
-        route_url = base_url + "/".join(addr.replace(" ", "+") for addr in formatted_addresses)
+        route_url = base_url + "/".join(
+            addr.replace(" ", "+") for addr in formatted_addresses
+        )
         return {
             "type": "ir.actions.act_url",
             "url": route_url,
