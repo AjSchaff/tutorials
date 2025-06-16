@@ -123,7 +123,7 @@ class StockPicking(models.Model):
             if delivery.picking_type_id.code == "incoming":
                 delivery.write(
                     {
-                        "optimized_sequence": "Incoming Shipment",
+                        "optimized_sequence": "",
                         "distance_from_warehouse": 0,
                         "total_route_distance": 0,
                     }
@@ -136,7 +136,7 @@ class StockPicking(models.Model):
             ):
                 delivery.write(
                     {
-                        "optimized_sequence": "Update Delivery Date",
+                        "optimized_sequence": "",
                         "distance_from_warehouse": 0,
                         "total_route_distance": 0,
                     }
@@ -315,7 +315,7 @@ class StockPicking(models.Model):
                 if d.scheduled_date and fields.Date.to_date(d.scheduled_date) < today:
                     d.write(
                         {
-                            "optimized_sequence": "Update Delivery Date",
+                            "optimized_sequence": "",
                             "distance_from_warehouse": 0,
                             "total_route_distance": 0,
                         }

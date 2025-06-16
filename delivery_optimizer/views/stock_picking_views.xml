@@ -32,6 +32,20 @@
         </field>
     </record>
 
+    <!-- Add search view with optimization filters -->
+    <record id="delivery_optimizer.stock_picking_search_inherit" model="ir.ui.view">
+        <field name="name">stock.picking.search.inherit.delivery.optimizer</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_internal_search"/>
+        <field name="arch" type="xml">
+            <xpath expr="//filter[@name='available']" position="after">
+                <separator/>
+                <filter name="optimized" string="Optimized" domain="[('optimized_sequence', '!=', False)]"/>
+                <filter name="not_optimized" string="Not Optimized" domain="[('optimized_sequence', '=', False)]"/>
+            </xpath>
+        </field>
+    </record>
+
     <!-- Create server action for route optimization -->
     <record id="action_optimize_route_server" model="ir.actions.server">
         <field name="name">Optimize Delivery Routes</field>
