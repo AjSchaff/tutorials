@@ -25,7 +25,7 @@ class SaleOrderLine(models.Model):
         vendors = suppliers.mapped('partner_id')
         
         # Get distance matrix from Google Maps
-        maps_helper = self.env['google.maps.helper']
+        maps_helper = self.env['delivery.optimizer.maps.helper']
         delivery_address = self.order_id.partner_shipping_id
         
         distance_data = maps_helper.get_distance_matrix(delivery_address, vendors)

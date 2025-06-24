@@ -1,9 +1,9 @@
 import logging
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from itertools import permutations
-from .res_config_settings import ResConfigSettings
+from collections import defaultdict
 
 _logger = logging.getLogger(__name__)
 
@@ -33,50 +33,80 @@ class StockPicking(models.Model):
         digits=(16, 2),
     )
 
+    def _format_address(self, partner):
+        """Format address for Google Maps API."""
+        return f"{partner.street}, {partner.city}, {partner.zip}"
+
+    def _call_vercel_optimize_route(self, addresses):
+        """Call Vercel API to get optimized route and distance matrix."""
+        url = "https://preview.vikuno.com/api/optimize-route"  # <-- update to your actual endpoint
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Odoo-Delivery-Optimizer/1.0",
+        }
+        data = {"addresses": [self._format_address(addr) for addr in addresses]}
+        import requests
+
+        try:
+            response = requests.post(url, json=data, headers=headers, timeout=30)
+            response.raise_for_status()
+            result = response.json()
+            if "error" in result:
+                raise UserError(
+                    _("Failed to get optimized route: %s") % result["error"]
+                )
+            return result["route"], result["distance_matrix"]
+        except Exception as e:
+            _logger.error(f"Error calling Vercel optimize route: {e}")
+            raise UserError(_("Failed to get optimized route from server."))
+
     def _validate_subscription(self):
         """Validate subscription status and revalidate if needed"""
-        # Get current user's email
         current_user_email = self.env.user.email
-        
         if not current_user_email:
             raise UserError(_("User email is required to validate subscription."))
-        
-        # Get subscription ID from config
-        subscription_id = self.env['ir.config_parameter'].sudo().get_param('delivery_optimizer.subscription_id')
+        subscription_id = (
+            self.env["ir.config_parameter"]
+            .sudo()
+            .get_param("delivery_optimizer.subscription_id")
+        )
         if not subscription_id:
-            raise UserError(_("Subscription ID is required. Please enter your subscription ID in Settings → Delivery Optimizer → Subscription Settings."))
-        
+            raise UserError(
+                _(
+                    "Subscription ID is required. Please enter your subscription ID in Settings → Delivery Route Optimizer → Subscription Settings."
+                )
+            )
         try:
-            # Call Vercel API to validate/revalidate subscription
             data = {
-                'subscriptionId': subscription_id,
-                'email': current_user_email,
+                "subscriptionId": subscription_id,
+                "email": current_user_email,
             }
-            
-            url = "https://v0-module-dashboard-git-develop-schaff-stack.vercel.app/api/check-subscription"
+
+            url = "https://preview.vikuno.com/api/check-subscription"
             headers = {
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'User-Agent': 'Odoo-Delivery-Optimizer/1.0',
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "Odoo-Delivery-Optimizer/1.0",
             }
-            
             import requests
+
             response = requests.post(url, json=data, headers=headers, timeout=15)
             response.raise_for_status()
             result = response.json()
-            
-            if not result.get('valid', False):
-                message = result.get('message', 'Subscription is invalid')
+            if not result.get("valid", False):
+                message = result.get("message", "Subscription is invalid")
                 raise UserError(_(f"❌ {message}"))
-            
             return True
-            
         except UserError:
-            # Re-raise UserError as-is (it already has the proper message)
             raise
         except Exception as e:
             _logger.error(f"Failed to validate subscription: {str(e)}")
-            raise UserError(_("Failed to validate subscription. Please try again or contact support."))
+            raise UserError(
+                _(
+                    "Failed to validate subscription. Please try again or contact support."
+                )
+            )
 
     def _validate_address(self, partner):
         """Validate if a partner has a complete address"""
@@ -224,15 +254,11 @@ class StockPicking(models.Model):
         if len(addresses) < 2:
             return True
 
-        distance_matrix = self._build_distance_matrix(addresses)
-        best_route = self._find_best_route(valid_deliveries, distance_matrix)
+        route, distance_matrix = self._call_vercel_optimize_route(addresses)
 
-        if not best_route:
-            raise UserError(_("Could not find a valid route."))
-
-        total_distance = self._calculate_route_distance(best_route, distance_matrix)
+        total_distance = self._calculate_route_distance(route, distance_matrix)
         self._assign_stop_numbers(
-            best_route, valid_deliveries, addresses, distance_matrix, total_distance
+            route, valid_deliveries, addresses, distance_matrix, total_distance
         )
 
         return True
@@ -338,58 +364,54 @@ class StockPicking(models.Model):
         return self._meters_to_miles(dist)
 
     def _assign_stop_numbers(self, route, deliveries, addresses, matrix, total_dist):
-        addr_map = {}
-        for d in deliveries:
-            key = self._get_address_key(d.partner_id)
-            _logger.info(
-                f"Delivery {d.name} address key: {key} (Partner: {d.partner_id.name})"
-            )
-            addr_map.setdefault(key, []).append(d)
+        from collections import defaultdict
 
-        used_keys, stop = set(), 1
         today = fields.Date.context_today(self)
+        addr_map = defaultdict(list)
+        for d in deliveries:
+            if d.scheduled_date and fields.Date.to_date(d.scheduled_date) == today:
+                key = self._get_address_key(d.partner_id)
+                addr_map[key].append(d)
+            else:
+                d.write({
+                    "optimized_sequence": "",
+                    "distance_from_warehouse": 0,
+                    "total_route_distance": 0,
+                })
+
+        used_keys = set()
+        stop = 1
         for idx in route:
+            if idx < 1 or idx >= len(addresses):
+                continue  # skip warehouse (index 0) and out-of-range
             partner = addresses[idx]
             key = self._get_address_key(partner)
-            _logger.info(f"Assigning stop {stop} to key: {key}")
             if key in used_keys:
                 continue
             used_keys.add(key)
-            for i, d in enumerate(addr_map.get(key, []), 1):
-                # Check if scheduled_date is in the past
-                if d.scheduled_date and fields.Date.to_date(d.scheduled_date) < today:
-                    d.write(
-                        {
-                            "optimized_sequence": "",
-                            "distance_from_warehouse": 0,
-                            "total_route_distance": 0,
-                        }
-                    )
-                    continue
-                dist = self._meters_to_miles(
-                    matrix["rows"][0]["elements"][idx]["distance"]["value"]
-                )
-                d.write(
-                    {
-                        "optimized_sequence": (
-                            stop if len(addr_map[key]) == 1 else float(f"{stop}.{i}")
-                        ),
-                        "distance_from_warehouse": dist,
-                        "total_route_distance": total_dist,
-                    }
-                )
+            deliveries_at_address = addr_map.get(key, [])
+            dist = 0
+            if matrix and "rows" in matrix and len(matrix["rows"]) > 0:
+                try:
+                    dist = self._meters_to_miles(matrix["rows"][0]["elements"][idx]["distance"]["value"])
+                except Exception:
+                    dist = 0
+            for i, d in enumerate(deliveries_at_address, 1):
+                seq = stop if len(deliveries_at_address) == 1 else float(f"{stop}.{i}")
+                d.write({
+                    "optimized_sequence": seq,
+                    "distance_from_warehouse": dist,
+                    "total_route_distance": total_dist if total_dist is not None else 0,
+                })
             stop += 1
 
     def action_optimize_route(self):
-        """Manual trigger for route optimization, processes all eligible deliveries for today."""
-        company = self.env.company
-        today = fields.Date.context_today(self)
-        today_str = fields.Date.to_string(today)
-
-        # Validate subscription before proceeding
         self._validate_subscription()
 
-        pickings = self.env["stock.picking"].search(
+        company = self.env.company
+        today = fields.Date.context_today(self)
+
+        all_pickings = self.env["stock.picking"].search(
             [
                 ("picking_type_id.code", "=", "outgoing"),
                 ("picking_type_id", "=", 2),
@@ -397,38 +419,55 @@ class StockPicking(models.Model):
                 ("company_id", "=", company.id),
             ]
         )
-        if not pickings:
+
+        todays_deliveries = [
+            p for p in all_pickings
+            if p.scheduled_date and fields.Date.to_date(p.scheduled_date) == today
+            and p.partner_id and p.partner_id.street and p.partner_id.city and p.partner_id.zip
+        ]
+        not_today_deliveries = [p for p in all_pickings if p not in todays_deliveries]
+
+        # Reset all non-today deliveries
+        for d in not_today_deliveries:
+            d.write({
+                "optimized_sequence": "",
+                "distance_from_warehouse": 0,
+                "total_route_distance": 0,
+            })
+
+        if not todays_deliveries:
             return {
                 "type": "ir.actions.client",
                 "tag": "display_notification",
                 "params": {
                     "title": _("No Eligible Deliveries"),
-                    "message": _(
-                        "No outgoing deliveries in assigned or confirmed state were found for company %s."
-                        % company.name
-                    ),
+                    "message": _("No outgoing deliveries in assigned or confirmed state were found for today."),
                     "type": "warning",
                     "sticky": False,
                 },
             }
-        try:
-            self._optimize_delivery_route(pickings)
-            return {
-                "type": "ir.actions.client",
-                "tag": "reload",
-            }
-        except Exception as e:
-            _logger.error(f"Route optimization failed: {str(e)}")
-            return {
-                "type": "ir.actions.client",
-                "tag": "display_notification",
-                "params": {
-                    "title": _("Error"),
-                    "message": str(e),
-                    "type": "danger",
-                    "sticky": True,
-                },
-            }
+
+        warehouse = self._get_validated_warehouse()
+        addresses = [warehouse.partner_id] + [d.partner_id for d in todays_deliveries]
+        route, distance_matrix = self._call_vercel_optimize_route(addresses)
+        self._assign_stop_numbers(route, todays_deliveries, addresses, distance_matrix, None)
+
+        # Calculate total route distance (warehouse -> stops in route order -> warehouse)
+        total_distance = 0
+        prev_idx = 0  # warehouse index
+        for idx in route:
+            total_distance += distance_matrix["rows"][prev_idx]["elements"][idx]["distance"]["value"]
+            prev_idx = idx
+        # Add return to warehouse
+        total_distance += distance_matrix["rows"][prev_idx]["elements"][0]["distance"]["value"]
+        total_distance = self._meters_to_miles(total_distance)
+        for d in todays_deliveries:
+            d.write({"total_route_distance": total_distance})
+
+        return {
+            "type": "ir.actions.client",
+            "tag": "reload",
+        }
 
     def _get_address_key(self, partner):
         """Return a normalized unique key for a delivery address."""
@@ -443,12 +482,12 @@ class StockPicking(models.Model):
 
     def action_open_google_maps_route(self):
         """Open Google Maps with optimized route - requires active subscription"""
-        
-        # Validate subscription before proceeding
-        self._validate_subscription()
-        
+        self._validate_subscription()  # Ensure subscription is valid
+
+        company = self.env.company
         today = fields.Date.context_today(self)
         today_str = fields.Date.to_string(today)
+
         pickings = self.env["stock.picking"].search(
             [
                 ("picking_type_id.code", "=", "outgoing"),
@@ -458,53 +497,42 @@ class StockPicking(models.Model):
             ]
         )
         warehouse = self.env["stock.warehouse"].search(
-            [("company_id", "=", self.env.company.id)], limit=1
+            [("company_id", "=", company.id)], limit=1
         )
-        if (
-            not warehouse
-            or not warehouse.partner_id
-            or not (
-                warehouse.partner_id.street
-                and warehouse.partner_id.city
-                and warehouse.partner_id.zip
-            )
-        ):
+        if not warehouse or not warehouse.partner_id:
             raise UserError(_("No valid warehouse address found."))
-        # Filter valid deliveries
-        valid_deliveries = []
-        for p in pickings:
-            addr = p.partner_id
-            if addr and addr.street and addr.city and addr.zip:
-                valid_deliveries.append(p)
+
+        valid_deliveries = [
+            p
+            for p in pickings
+            if p.partner_id
+            and p.partner_id.street
+            and p.partner_id.city
+            and p.partner_id.zip
+        ]
         if not valid_deliveries:
             raise UserError(_("No valid delivery addresses found."))
-        # Build addresses list for optimizer
+
         addresses = [warehouse.partner_id] + [d.partner_id for d in valid_deliveries]
-        distance_matrix = self._build_distance_matrix(addresses)
-        best_route = self._find_best_route(valid_deliveries, distance_matrix)
-        if not best_route:
-            raise UserError(_("Could not find a valid route."))
+        # Only add warehouse at the end if it's not already the last stop
+        if addresses[-1] != warehouse.partner_id:
+            addresses.append(warehouse.partner_id)
+        route, _ = self._call_vercel_optimize_route(addresses)
+
         # Build the ordered address list: warehouse -> optimized deliveries (no duplicates) -> warehouse
         ordered_addresses = [warehouse.partner_id]
         seen = set()
-        for idx in best_route:
+        for idx in route:
             partner = addresses[idx]
-            key = (
-                (partner.street or "").strip().lower(),
-                (partner.street2 or "").strip().lower(),
-                (partner.city or "").strip().lower(),
-                (partner.state_id.name if partner.state_id else "").strip().lower(),
-                (partner.zip or "").strip(),
-                (partner.country_id.code if partner.country_id else "").strip().upper(),
-            )
+            key = (partner.street, partner.city, partner.zip)
             if key not in seen:
                 seen.add(key)
                 ordered_addresses.append(partner)
-        ordered_addresses.append(warehouse.partner_id)  # Return to warehouse
-        # Format for Google Maps
-        formatted_addresses = [
-            f"{a.street}, {a.city}, {a.zip}" for a in ordered_addresses
-        ]
+        # Only add warehouse at the end if it's not already the last stop
+        if ordered_addresses[-1] != warehouse.partner_id:
+            ordered_addresses.append(warehouse.partner_id)
+
+        formatted_addresses = [self._format_address(a) for a in ordered_addresses]
         base_url = "https://www.google.com/maps/dir/"
         route_url = base_url + "/".join(
             addr.replace(" ", "+") for addr in formatted_addresses

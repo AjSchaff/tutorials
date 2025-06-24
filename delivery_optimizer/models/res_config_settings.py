@@ -9,18 +9,18 @@ _logger = logging.getLogger(__name__)
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
-    SUBSCRIPTION_INACTIVE_ERROR = _(
-        "Your subscription is inactive. Please renew your subscription to use route optimization."
-    )
-
-    # Your Vercel API endpoint
-    VERCEL_API_BASE_URL = "https://v0-module-dashboard-git-develop-schaff-stack.vercel.app"  # Replace with your actual Vercel domain
+    # Base URL for your Vercel API
+    VERCEL_API_BASE_URL = "https://preview.vikuno.com"
+    
+    # API endpoints (these will be appended to the base URL)
+    SUBSCRIPTION_CHECK_ENDPOINT = "/api/check-subscription"
+    GOOGLE_OPTIMIZE_ENDPOINT = "/api/google/optimize-route"
 
     # Subscription fields
     subscription_id = fields.Char(
         string="Subscription ID",
-        config_parameter="delivery_optimizer.subscription_id",
-        help="Enter the Subscription ID from your subscription page after purchase.",
+        help="Enter your subscription ID from the purchase confirmation",
+        config_parameter="delivery_optimizer.subscription_id"
     )
 
     # Activation tracking fields
@@ -94,102 +94,44 @@ class ResConfigSettings(models.TransientModel):
             else:
                 rec.subscription_tier = "tier4"
 
-    def _call_vercel_api(self, data):
-        """Make a POST request to your Vercel API endpoint"""
-        url = f"{self.VERCEL_API_BASE_URL}/api/check-subscription"
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Odoo-Delivery-Optimizer/1.0",
-        }
-
+    def _call_vercel_api(self, data, endpoint=None):
+        """Make API call to Vercel with proper error handling"""
+        if endpoint is None:
+            endpoint = self.SUBSCRIPTION_CHECK_ENDPOINT
+            
+        url = f"{self.VERCEL_API_BASE_URL}{endpoint}"
+        
         try:
-            response = requests.post(url, json=data, headers=headers, timeout=15)
+            response = requests.post(
+                url,
+                json=data,
+                headers={'Content-Type': 'application/json'},
+                timeout=30
+            )
             response.raise_for_status()
             return response.json()
-
-        except requests.exceptions.ConnectionError:
-            _logger.error(f"Connection error when calling Vercel API: {url}")
-            raise UserError(
-                _(
-                    "Could not connect to the subscription service. Please check your internet connection and try again."
-                )
-            )
-        except requests.exceptions.Timeout:
-            _logger.error(f"Timeout when calling Vercel API: {url}")
-            raise UserError(
-                _("Request to subscription service timed out. Please try again.")
-            )
-        except requests.exceptions.HTTPError as e:
-            _logger.error(
-                f"HTTP error when calling Vercel API: {url}, Status: {e.response.status_code}"
-            )
-            try:
-                error_data = e.response.json()
-                error_message = error_data.get(
-                    "message", f"HTTP {e.response.status_code}"
-                )
-            except:
-                error_message = f"HTTP {e.response.status_code}"
+        except requests.exceptions.RequestException as e:
+            error_message = f"HTTP {response.status_code}" if hasattr(e, 'response') else str(e)
+            _logger.error(f"HTTP error when calling Vercel API: {url}, Status: {error_message}")
             raise UserError(_(f"Subscription service error: {error_message}"))
-        except Exception as e:
-            _logger.error(
-                f"Unexpected error when calling Vercel API: {url}, Error: {str(e)}"
-            )
-            raise UserError(
-                _(f"Unexpected error when contacting subscription service: {str(e)}")
-            )
-
-    def _check_subscription_status_vercel(self):
-        """Check subscription status using your Vercel API"""
-        sub_id = self.subscription_id
-        if not sub_id:
-            return False
-
-        try:
-            data = {
-                "subscriptionId": sub_id,
-                "email": self.env.user.email,
-            }
-            response = self._call_vercel_api(data)
-            return response.get("valid", False)
-        except Exception as e:
-            _logger.error(
-                f"Failed to check subscription status via Vercel API: {str(e)}"
-            )
-            return False
-
-    def _check_subscription_status_api(self):
-        """Legacy method - now calls Vercel API"""
-        return self._check_subscription_status_vercel()
 
     def check_subscription_status(self):
-        """Check subscription status and handle activation logic"""
-        # Get current user's email
-        current_user_email = self.env.user.email
-
-        if not current_user_email:
-            raise UserError(_("User email is required to check subscription status."))
-
+        """Check subscription status using your Vercel API"""
         if not self.subscription_id:
-            raise UserError(
-                _(
-                    "Subscription ID is required. Please enter your subscription ID first."
-                )
-            )
-
+            raise UserError(_("Please enter a subscription ID first."))
+        
+        user_email = self.env.user.email
+        if not user_email:
+            raise UserError(_("User email is required. Please set your email in your user profile."))
+        
         try:
-            # Call Vercel API - it handles all the activation logic
             data = {
-                "subscriptionId": self.subscription_id,
-                "email": current_user_email,
+                'subscriptionId': self.subscription_id,
+                'email': user_email
             }
-            response = self._call_vercel_api(data)
-            
-            # Handle the response based on your API's response format
-            if response.get('valid', False):
-                message = response.get('message', 'Subscription is valid')
+            response = self._call_vercel_api(data, "/api/check-subscription")
+            if response.get('valid'):
+                message = response.get('message', 'Subscription validated successfully')
                 return {
                     "type": "ir.actions.client",
                     "tag": "display_notification",
@@ -201,17 +143,55 @@ class ResConfigSettings(models.TransientModel):
                     },
                 }
             else:
-                message = response.get('message', 'Subscription is invalid')
-                raise UserError(_(f"❌ {message}"))
-            
-        except UserError:
-            raise
+                error_msg = response.get('message', 'Subscription validation failed')
+                raise UserError(_(error_msg))
         except Exception as e:
-            _logger.error(f"Unexpected error during subscription check: {str(e)}")
-            raise UserError(_(f"Failed to check subscription: {str(e)}"))
+            _logger.error(f"Failed to check subscription via Vercel API: {str(e)}")
+            raise UserError(_("Subscription service error: %s") % str(e))
 
     def get_subscription_status(self):
         # For button in UI
         active = self._check_subscription_status_vercel()
         status = "active" if active else "inactive"
         raise UserError(f"Subscription Status: {status}")
+
+    def _assign_stop_numbers(self, route, deliveries, addresses, matrix, total_dist):
+        addr_map = {}
+        for d in deliveries:
+            key = self._get_address_key(d.partner_id)
+            addr_map.setdefault(key, []).append(d)
+
+        used_keys = set()
+        stop = 1
+        today = fields.Date.context_today(self)
+        for idx in route:
+            if idx >= len(addresses):
+                _logger.warning(f"Route index {idx} out of range for addresses (len={len(addresses)})")
+                continue  # Skip invalid indices
+
+            partner = addresses[idx]
+            key = self._get_address_key(partner)
+            if key in used_keys:
+                continue
+            used_keys.add(key)
+            for d in addr_map.get(key, []):
+                if d.scheduled_date and fields.Date.to_date(d.scheduled_date) != today:
+                    d.write(
+                        {
+                            "optimized_sequence": "",
+                            "distance_from_warehouse": 0,
+                            "total_route_distance": 0,
+                        }
+                    )
+                    continue
+                dist = self._meters_to_miles(
+                    matrix["rows"][0]["elements"][idx]["distance"]["value"]
+                )
+                d.write(
+                    {
+                        "optimized_sequence": stop,
+                        "distance_from_warehouse": dist,
+                        "total_route_distance": total_dist,
+                    }
+                )
+            stop += 1
