@@ -5,7 +5,7 @@
     "summary": "Optimize delivery routes using Google Maps",
     "description": """
         Optimize delivery routes using Google Maps API:
-        - Integrates with Google Maps API for route optimization
+        - Integrates with Google Maps API for route optimization (via secure proxy)
         - Calculates optimal delivery sequence
         - Updates delivery order sequence automatically
         - Manual optimization trigger available
@@ -14,8 +14,10 @@
     "website": "https://www.nko.com",
     "depends": [
         "base",
+        "sale",
+        "purchase",
         "stock",
-        "google_integration",
+        "contacts",
     ],
     "data": [
         "views/stock_picking_views.xml",

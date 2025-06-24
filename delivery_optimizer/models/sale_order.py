@@ -26,7 +26,7 @@ class SaleOrder(models.Model):
             order.nearest_vendor_id = False
             
             if order.partner_shipping_id:
-                maps_helper = self.env['google.maps.helper']
+                maps_helper = self.env['delivery.optimizer.maps.helper']
                 vendors = self.env['res.partner'].search([
                     ('supplier_rank', '>', 0),  # Is a vendor
                     ('active', '=', True)
@@ -39,7 +39,6 @@ class SaleOrder(models.Model):
                         distances = []
                         for i, element in enumerate(elements):
                             if element.get('status') == 'OK':
-                                # Convert meters to miles (1 meter = 0.000621371 miles)
                                 meters = element.get('distance', {}).get('value', 999999)
                                 miles = meters * 0.000621371
                                 distances.append((vendors[i], meters, miles))
@@ -54,11 +53,10 @@ class SaleOrder(models.Model):
             order.vendor_distance = 0.0
             
             if order.partner_shipping_id and order.nearest_vendor_id:
-                maps_helper = self.env['google.maps.helper']
+                maps_helper = self.env['delivery.optimizer.maps.helper']
                 distance_data = maps_helper.get_distance_matrix(order.partner_shipping_id, order.nearest_vendor_id)
                 if distance_data and distance_data.get('rows'):
                     elements = distance_data['rows'][0].get('elements', [])
                     if elements and elements[0].get('status') == 'OK':
-                        # Convert meters to miles (1 meter = 0.000621371 miles)
                         meters = elements[0].get('distance', {}).get('value', 0)
                         order.vendor_distance = meters * 0.000621371 
