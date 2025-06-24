@@ -33,6 +33,51 @@ class StockPicking(models.Model):
         digits=(16, 2),
     )
 
+    def _validate_subscription(self):
+        """Validate subscription status and revalidate if needed"""
+        # Get current user's email
+        current_user_email = self.env.user.email
+        
+        if not current_user_email:
+            raise UserError(_("User email is required to validate subscription."))
+        
+        # Get subscription ID from config
+        subscription_id = self.env['ir.config_parameter'].sudo().get_param('delivery_optimizer.subscription_id')
+        if not subscription_id:
+            raise UserError(_("Subscription ID is required. Please enter your subscription ID in Settings → Delivery Optimizer → Subscription Settings."))
+        
+        try:
+            # Call Vercel API to validate/revalidate subscription
+            data = {
+                'subscriptionId': subscription_id,
+                'email': current_user_email,
+            }
+            
+            url = "https://v0-module-dashboard-git-develop-schaff-stack.vercel.app/api/check-subscription"
+            headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'User-Agent': 'Odoo-Delivery-Optimizer/1.0',
+            }
+            
+            import requests
+            response = requests.post(url, json=data, headers=headers, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+            
+            if not result.get('valid', False):
+                message = result.get('message', 'Subscription is invalid')
+                raise UserError(_(f"❌ {message}"))
+            
+            return True
+            
+        except UserError:
+            # Re-raise UserError as-is (it already has the proper message)
+            raise
+        except Exception as e:
+            _logger.error(f"Failed to validate subscription: {str(e)}")
+            raise UserError(_("Failed to validate subscription. Please try again or contact support."))
+
     def _validate_address(self, partner):
         """Validate if a partner has a complete address"""
         if not partner:
@@ -341,10 +386,8 @@ class StockPicking(models.Model):
         today = fields.Date.context_today(self)
         today_str = fields.Date.to_string(today)
 
-        # Check subscription status before proceeding
-        config = self.env["res.config.settings"].create({})
-        if not config.check_subscription_status():
-            raise UserError(ResConfigSettings.SUBSCRIPTION_INACTIVE_ERROR)
+        # Validate subscription before proceeding
+        self._validate_subscription()
 
         pickings = self.env["stock.picking"].search(
             [
@@ -399,6 +442,11 @@ class StockPicking(models.Model):
         )
 
     def action_open_google_maps_route(self):
+        """Open Google Maps with optimized route - requires active subscription"""
+        
+        # Validate subscription before proceeding
+        self._validate_subscription()
+        
         today = fields.Date.context_today(self)
         today_str = fields.Date.to_string(today)
         pickings = self.env["stock.picking"].search(

@@ -6,7 +6,7 @@
       <field name="inherit_id" ref="stock.res_config_settings_view_form"/>
       <field name="arch" type="xml">
         <xpath expr="//form" position="inside">
-          <app data-string="Delivery Optimizer" string="Delivery Optimizer" name="delivery_optimizer" logo="/base/static/description/settings.png">
+          <app data-string="Delivery Optimizer" string="Delivery Optimizer" name="delivery_optimizer" logo="/base/static/img/truck.png">
             <block title="Subscription Settings" name="subscription_settings">
               <setting id="subscription_id" string="Subscription Configuration" help="Enter your subscription ID from your external billing account.">
                 <field name="subscription_id"/>
