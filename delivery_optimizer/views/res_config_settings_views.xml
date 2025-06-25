@@ -8,7 +8,7 @@
         <xpath expr="//form" position="inside">
           <app data-string="Delivery Route Optimizer" string="Delivery Route Optimizer" name="delivery_optimizer" logo="/base/static/img/truck.png">
             <block title="Subscription Settings" name="subscription_settings">
-              <setting id="subscription_id" string="Subscription Configuration" help="Enter your subscription ID from your external billing account.">
+              <setting id="subscription_id" string="Subscription Configuration" help="Enter your subscription ID from your external billing account." documentation="https://preview.vikuno.com/modules/delivery-route-optimizier" title="In order to use this feature, you need to activate your subscription.">
                 <field name="subscription_id"/>
                 <button name="check_subscription_status" type="object" string="Activate Subscription" class="btn-secondary ps-2 w-100" icon="fa-refresh" title="Get the status of your subscription from your external billing account."/>
               </setting>
