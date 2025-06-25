@@ -1,6 +1,6 @@
 {
     "name": "Delivery Route Optimizer",
-    "version": "1.0",
+    "version": "18.0.0.0.0",
     "category": "Inventory/Delivery",
     "summary": "Optimize delivery routes using Google Maps",
     "description": """
@@ -10,8 +10,7 @@
         - Updates delivery order sequence automatically
         - Manual optimization trigger available
     """,
-    "author": "NKO",
-    "website": "https://www.nko.com",
+    "author": "https://github.com/AjSchaff",
     "depends": [
         "base",
         "sale",

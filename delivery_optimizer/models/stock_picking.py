@@ -115,15 +115,8 @@ class StockPicking(models.Model):
         required_fields = ["street", "city", "zip"]
         missing_fields = [field for field in required_fields if not partner[field]]
         if missing_fields:
-            _logger.warning(
-                f"Partner {partner.name} is missing fields: {', '.join(missing_fields)}"
-            )
             return False
 
-        # Log the complete address for debugging
-        _logger.info(
-            f"Valid address for {partner.name}: {partner.street}, {partner.city}, {partner.zip}"
-        )
         return True
 
     def _meters_to_miles(self, meters):
@@ -150,9 +143,6 @@ class StockPicking(models.Model):
                     next_point
                 ]
                 if distance_element.get("status") != "OK":
-                    _logger.warning(
-                        f"Distance calculation failed between points {current_point} and {next_point}"
-                    )
                     raise UserError(
                         _(
                             "Could not calculate distance between some locations. Please verify addresses."
@@ -168,9 +158,6 @@ class StockPicking(models.Model):
         try:
             return_element = distance_matrix["rows"][current_point]["elements"][0]
             if return_element.get("status") != "OK":
-                _logger.warning(
-                    f"Return distance calculation failed from point {current_point}"
-                )
                 raise UserError(
                     _(
                         "Could not calculate return distance to warehouse. Please verify addresses."
@@ -241,15 +228,6 @@ class StockPicking(models.Model):
         if not valid_deliveries:
             return True
 
-        # Log all valid addresses
-        for d in valid_deliveries:
-            addr = d.partner_id
-            _logger.info(
-                f"Valid address for {addr.name}: {addr.street}, {addr.street2}, {addr.city}, "
-                f"{addr.state_id.name if addr.state_id else ''}, {addr.zip}, "
-                f"{addr.country_id.code if addr.country_id else ''}"
-            )
-
         addresses = [warehouse.partner_id] + [d.partner_id for d in valid_deliveries]
         if len(addresses) < 2:
             return True
@@ -272,26 +250,9 @@ class StockPicking(models.Model):
 
     def _get_validated_warehouse(self):
         # Log the company_id we're searching with
-        _logger.info(f"Searching for warehouse with company_id: {self.env.company.id}")
-        _logger.info(f"Company name: {self.env.company.name}")
-
-        # Let's also log all warehouses in the system to see what's available
-        all_warehouses = self.env["stock.warehouse"].search([])
-        _logger.info(
-            f"All warehouses in system: {[(w.name, w.company_id.name) for w in all_warehouses]}"
-        )
-
         warehouse = self.env["stock.warehouse"].search(
             [("company_id", "=", self.env.company.id)], limit=1
         )
-
-        # Add logging to show what warehouse was found
-        _logger.info(f"Found warehouse: {warehouse.name if warehouse else 'None'}")
-        if warehouse and warehouse.partner_id:
-            _logger.info(f"Warehouse partner: {warehouse.partner_id.name}")
-            _logger.info(
-                f"Warehouse address: {warehouse.partner_id.street}, {warehouse.partner_id.city}, {warehouse.partner_id.zip}"
-            )
 
         if not warehouse or not warehouse.partner_id:
             raise UserError(_("Please configure warehouse address first."))
@@ -373,11 +334,13 @@ class StockPicking(models.Model):
                 key = self._get_address_key(d.partner_id)
                 addr_map[key].append(d)
             else:
-                d.write({
-                    "optimized_sequence": "",
-                    "distance_from_warehouse": 0,
-                    "total_route_distance": 0,
-                })
+                d.write(
+                    {
+                        "optimized_sequence": "",
+                        "distance_from_warehouse": 0,
+                        "total_route_distance": 0,
+                    }
+                )
 
         used_keys = set()
         stop = 1
@@ -393,16 +356,22 @@ class StockPicking(models.Model):
             dist = 0
             if matrix and "rows" in matrix and len(matrix["rows"]) > 0:
                 try:
-                    dist = self._meters_to_miles(matrix["rows"][0]["elements"][idx]["distance"]["value"])
+                    dist = self._meters_to_miles(
+                        matrix["rows"][0]["elements"][idx]["distance"]["value"]
+                    )
                 except Exception:
                     dist = 0
             for i, d in enumerate(deliveries_at_address, 1):
                 seq = stop if len(deliveries_at_address) == 1 else float(f"{stop}.{i}")
-                d.write({
-                    "optimized_sequence": seq,
-                    "distance_from_warehouse": dist,
-                    "total_route_distance": total_dist if total_dist is not None else 0,
-                })
+                d.write(
+                    {
+                        "optimized_sequence": seq,
+                        "distance_from_warehouse": dist,
+                        "total_route_distance": (
+                            total_dist if total_dist is not None else 0
+                        ),
+                    }
+                )
             stop += 1
 
     def action_optimize_route(self):
@@ -421,19 +390,26 @@ class StockPicking(models.Model):
         )
 
         todays_deliveries = [
-            p for p in all_pickings
-            if p.scheduled_date and fields.Date.to_date(p.scheduled_date) == today
-            and p.partner_id and p.partner_id.street and p.partner_id.city and p.partner_id.zip
+            p
+            for p in all_pickings
+            if p.scheduled_date
+            and fields.Date.to_date(p.scheduled_date) == today
+            and p.partner_id
+            and p.partner_id.street
+            and p.partner_id.city
+            and p.partner_id.zip
         ]
         not_today_deliveries = [p for p in all_pickings if p not in todays_deliveries]
 
         # Reset all non-today deliveries
         for d in not_today_deliveries:
-            d.write({
-                "optimized_sequence": "",
-                "distance_from_warehouse": 0,
-                "total_route_distance": 0,
-            })
+            d.write(
+                {
+                    "optimized_sequence": "",
+                    "distance_from_warehouse": 0,
+                    "total_route_distance": 0,
+                }
+            )
 
         if not todays_deliveries:
             return {
@@ -441,7 +417,9 @@ class StockPicking(models.Model):
                 "tag": "display_notification",
                 "params": {
                     "title": _("No Eligible Deliveries"),
-                    "message": _("No outgoing deliveries in assigned or confirmed state were found for today."),
+                    "message": _(
+                        "No outgoing deliveries in assigned or confirmed state were found for today."
+                    ),
                     "type": "warning",
                     "sticky": False,
                 },
@@ -450,17 +428,37 @@ class StockPicking(models.Model):
         warehouse = self._get_validated_warehouse()
         addresses = [warehouse.partner_id] + [d.partner_id for d in todays_deliveries]
         route, distance_matrix = self._call_vercel_optimize_route(addresses)
-        self._assign_stop_numbers(route, todays_deliveries, addresses, distance_matrix, None)
+        self._assign_stop_numbers(
+            route, todays_deliveries, addresses, distance_matrix, None
+        )
 
-        # Calculate total route distance (warehouse -> stops in route order -> warehouse)
-        total_distance = 0
-        prev_idx = 0  # warehouse index
+        # Calculate total route distance (warehouse -> unique stops in route order -> warehouse)
+        unique_route = []
+        seen_keys = set()
         for idx in route:
-            total_distance += distance_matrix["rows"][prev_idx]["elements"][idx]["distance"]["value"]
-            prev_idx = idx
-        # Add return to warehouse
-        total_distance += distance_matrix["rows"][prev_idx]["elements"][0]["distance"]["value"]
+            if idx < 1 or idx >= len(addresses):
+                continue
+            partner = addresses[idx]
+            key = self._get_address_key(partner)
+            if key not in seen_keys:
+                unique_route.append(idx)
+                seen_keys.add(key)
+        path = [0] + unique_route + [0]  # warehouse -> unique stops -> warehouse
+        total_distance = 0
+        for i in range(len(path) - 1):
+            from_idx = path[i]
+            to_idx = path[i + 1]
+            total_distance += distance_matrix["rows"][from_idx]["elements"][to_idx][
+                "distance"
+            ]["value"]
         total_distance = self._meters_to_miles(total_distance)
+
+        for i in range(len(path) - 1):
+            from_idx = path[i]
+            to_idx = path[i + 1]
+            dist = distance_matrix["rows"][from_idx]["elements"][to_idx]["distance"][
+                "value"
+            ]
         for d in todays_deliveries:
             d.write({"total_route_distance": total_distance})
 
